@@ -107,7 +107,9 @@ Create `.env.local`:
 ```env
 NEXT_PUBLIC_ALCHEMY_API_KEY=your_key_here
 NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=your_id_here
+MEM0_API_KEY=your_mem0_key_here
 ```
+For the unified financial graph and per-node chat: set `MEM0_API_KEY` (and optionally `MEM0_BASE_URL` for self-hosted). Enable Mem0's graph feature for relationship edges between memories.
 
 ### 3. Run Development Server
 ```bash

@@ -1,17 +1,19 @@
 'use client';
 import { useGraphStore } from '@/stores/graphStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import type { NodeCategory, GraphNode, GraphLink } from '@/types/graph';
+import { useMemo } from 'react';
 
-// Format volume with proper Wei conversion and abbreviations
+const CATEGORY_STYLES: Record<NodeCategory | string, { bg: string; text: string }> = {
+    defi: { bg: 'bg-cyan-500/20', text: 'text-cyan-400' },
+    tradfi: { bg: 'bg-amber-500/20', text: 'text-amber-400' },
+    cex: { bg: 'bg-indigo-500/20', text: 'text-indigo-400' },
+    p2p: { bg: 'bg-slate-500/20', text: 'text-slate-400' },
+};
+
 function formatVolume(value: number): string {
     if (!value || value === 0) return '$0';
-
-    // If absurdly large (probably Wei), normalize
-    if (value > 1e12) {
-        value = value / 1e18;
-    }
-
-    // Format with abbreviations
+    if (value > 1e12) value = value / 1e18;
     if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
     if (value >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
     if (value >= 1e3) return `$${(value / 1e3).toFixed(2)}K`;
@@ -19,12 +21,32 @@ function formatVolume(value: number): string {
 }
 
 export function NodeDetails() {
-    const { selectedNode, selectNode, expandedNodes } = useGraphStore();
+    const { selectedNode, selectNode, expandedNodes, graph } = useGraphStore();
     const isMobile = useIsMobile();
+
+    const { totalTxCount, relatedNodes } = useMemo(() => {
+        if (!selectedNode || !graph.links.length) return { totalTxCount: 0, relatedNodes: [] as GraphNode[] };
+        const nodeId = selectedNode.id;
+        let count = 0;
+        const relatedIds = new Set<string>();
+        for (const link of graph.links) {
+            if (link.source === nodeId || link.target === nodeId) {
+                count += link.txCount;
+                const other = link.source === nodeId ? link.target : link.source;
+                relatedIds.add(other);
+            }
+        }
+        const nodes = graph.nodes.filter((n) => relatedIds.has(n.id));
+        return { totalTxCount: count, relatedNodes: nodes };
+    }, [selectedNode?.id, graph.nodes, graph.links]);
 
     if (!selectedNode) return null;
 
     const isExpanded = expandedNodes.has(selectedNode.id);
+    const title = selectedNode.type === 'main' ? selectedNode.label : (selectedNode.displayName || selectedNode.label);
+    const category = (selectedNode as { category?: NodeCategory }).category || 'p2p';
+    const style = CATEGORY_STYLES[category] || CATEGORY_STYLES.p2p;
+    const isAddress = /^0x[a-f0-9]{40}$/i.test(selectedNode.id);
 
     const content = (
         <>
@@ -36,76 +58,86 @@ export function NodeDetails() {
                 ×
             </button>
 
-            <div className="space-y-3">
-                {/* Label / ENS */}
-                <h3 className="text-white font-bold text-lg truncate pr-8">
-                    {selectedNode.label}
+            <div className="space-y-4">
+                <h3 className="text-white font-bold text-xl pr-8 leading-tight">
+                    {title}
                 </h3>
 
-                {/* Full Address */}
-                <div>
-                    <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">
-                        Address
-                    </p>
-                    <p className="text-gray-300 text-sm font-mono break-all">
-                        {selectedNode.id}
-                    </p>
-                </div>
-
-                {/* Type */}
-                <div>
-                    <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">
-                        Type
-                    </p>
-                    <span className="inline-block px-2 py-1 rounded-full bg-blue-600/20 text-blue-400 text-xs">
+                <div className="flex flex-wrap gap-2">
+                    <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${style.bg} ${style.text}`}>
+                        {category}
+                    </span>
+                    <span className="inline-block px-2.5 py-1 rounded-full bg-slate-600/30 text-slate-300 text-xs">
                         {selectedNode.type}
                     </span>
                 </div>
 
-                {/* Volume */}
-                {selectedNode.value && selectedNode.value > 0 && (
+                <div>
+                    <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">
+                        {isAddress ? 'Address' : 'ID'}
+                    </p>
+                    <p className="text-gray-400 text-sm font-mono break-all">
+                        {selectedNode.id}
+                    </p>
+                </div>
+
+                {selectedNode.value != null && selectedNode.value > 0 && (
                     <div>
-                        <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">
-                            Volume
-                        </p>
-                        <span className="text-green-400 text-lg font-bold">
+                        <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">Volume</p>
+                        <span className="text-emerald-400 text-xl font-bold">
                             {formatVolume(selectedNode.value)}
                         </span>
                     </div>
                 )}
 
-                {/* Status */}
+                {totalTxCount > 0 && (
+                    <div>
+                        <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">Your history</p>
+                        <p className="text-gray-300 text-sm">{totalTxCount} transaction{totalTxCount !== 1 ? 's' : ''} with this entity</p>
+                    </div>
+                )}
+
+                {relatedNodes.length > 0 && (
+                    <div>
+                        <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">Related</p>
+                        <ul className="text-gray-400 text-sm space-y-1">
+                            {relatedNodes.slice(0, 8).map((n) => (
+                                <li key={n.id}>{n.displayName || n.label || n.id.slice(0, 10)}…</li>
+                            ))}
+                            {relatedNodes.length > 8 && <li className="text-gray-500">+{relatedNodes.length - 8} more</li>}
+                        </ul>
+                    </div>
+                )}
+
                 <div>
-                    <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">
-                        Status
-                    </p>
+                    <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">Status</p>
                     <span
-                        className={`inline-block px-2 py-1 rounded-full text-xs ${selectedNode.isLoading
-                            ? 'bg-yellow-600/20 text-yellow-400'
-                            : isExpanded
-                                ? 'bg-green-600/20 text-green-400'
-                                : 'bg-gray-600/20 text-gray-400'
-                            }`}
+                        className={`inline-block px-2.5 py-1 rounded-full text-xs font-medium ${
+                            selectedNode.isLoading
+                                ? 'bg-amber-600/20 text-amber-400'
+                                : isExpanded
+                                    ? 'bg-emerald-600/20 text-emerald-400'
+                                    : isAddress
+                                        ? 'bg-slate-600/20 text-slate-400'
+                                        : 'bg-slate-600/20 text-slate-400'
+                        }`}
                     >
-                        {selectedNode.isLoading
-                            ? 'Loading...'
-                            : isExpanded
-                                ? 'Expanded'
-                                : 'Click to expand'}
+                        {selectedNode.isLoading ? 'Loading…' : isExpanded ? 'Expanded' : isAddress ? 'Click to expand' : 'Simulated'}
                     </span>
                 </div>
 
-                {/* External Links */}
-                <div className="pt-2 border-t border-gray-700">
-                    <a
-                        href={`https://etherscan.io/address/${selectedNode.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-400 hover:text-blue-300 text-sm underline"
-                    >
-                        View on Etherscan ↗
-                    </a>
-                </div>
+                {isAddress && (
+                    <div className="pt-3 border-t border-gray-700">
+                        <a
+                            href={`https://etherscan.io/address/${selectedNode.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300 text-sm font-medium"
+                        >
+                            View on Etherscan →
+                        </a>
+                    </div>
+                )}
             </div>
         </>
     );

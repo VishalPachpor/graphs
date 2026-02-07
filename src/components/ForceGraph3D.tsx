@@ -15,6 +15,14 @@ const PROTOCOL_LOGOS: Record<string, string> = {
     '0x7a250d5630b4cf539739df2c5dacb4c659f2488d': 'https://cryptologos.cc/logos/uniswap-uni-logo.png',
 };
 
+const CATEGORY_COLORS: Record<string, string> = {
+    defi: '#22d3ee',
+    tradfi: '#fbbf24',
+    cex: '#6366f1',
+    p2p: '#94a3b8',
+    main: '#60a5fa',
+};
+
 interface Props {
     graphData: GraphData;
     onNodeClick: (node: GraphNode) => void;
@@ -46,12 +54,11 @@ export default function ForceGraph3D({ graphData, onNodeClick }: Props) {
 
         const fg = fgRef.current;
 
-        // 1. RADIAL STAR LAYOUT FORCE
-        // Manually position first layer in a circle, allow others to flow
+        // 1. RADIAL STAR LAYOUT FORCE — more spacing, less clutter
         try {
-            fg.d3Force('charge').strength(-300); // Strong repulsion for spacing
-            fg.d3Force('link').distance(150);    // Consistent beam length
-            fg.d3Force('center').strength(0.1);  // Gravity to center
+            fg.d3Force('charge').strength(-600); // Stronger repulsion
+            fg.d3Force('link').distance(220);    // Longer links
+            fg.d3Force('center').strength(0.08); // Slight pull to center
 
             // Custom radial force
             fg.d3Force('radial', () => {
@@ -146,35 +153,30 @@ export default function ForceGraph3D({ graphData, onNodeClick }: Props) {
         onNodeClick(node);
     }, [onNodeClick]);
 
-    // 🎨 CUSTOM NODE RENDERING (Halo + Sprite)
+    // 🎨 CUSTOM NODE RENDERING — label from displayName, border by category
     const nodeThreeObject = useCallback((node: any) => {
         const group = new THREE.Group();
         const isMain = node.type === 'main';
-        const size = isMain ? 12 : (6 + Math.log(node.value || 1) * 0.4); // Increased base size from 4 to 6 for better visibility
+        const size = isMain ? 14 : (5 + Math.log(node.value || 1) * 0.35);
+        const category = node.category || 'p2p';
+        const borderColor = isMain ? CATEGORY_COLORS.main : (CATEGORY_COLORS[category] || '#475569');
 
-        // 1. HALO RING REMOVED (Per user feedback: "too cluttered")
-        // We rely on size and bloom for emphasis now.
-
-        // 2. AVATAR / ICON RENDERING
         const protocolLogo = PROTOCOL_LOGOS[node.id.toLowerCase()];
         const imgUrl = isMain ? `https://effigy.im/a/${node.id}.png` : protocolLogo;
+        const textLabel = (node.displayName || node.label || node.id).slice(0, 6);
 
-        // Create canvas for node texture (Label + Circle)
         const canvas = document.createElement('canvas');
         canvas.width = 128; canvas.height = 128;
         const ctx = canvas.getContext('2d')!;
 
-        // Draw helper
         const drawNode = (image?: HTMLImageElement) => {
             ctx.clearRect(0, 0, 128, 128);
 
-            // Background
             ctx.beginPath();
-            ctx.arc(64, 64, 60, 0, 2 * Math.PI); // Radius 60 (fit 128 width)
-            ctx.fillStyle = isMain ? '#1e293b' : '#334155';
+            ctx.arc(64, 64, 60, 0, 2 * Math.PI);
+            ctx.fillStyle = isMain ? '#1e3a5f' : '#1e293b';
             ctx.fill();
 
-            // Image (Clipped to Circle)
             if (image) {
                 ctx.save();
                 ctx.beginPath();
@@ -184,20 +186,18 @@ export default function ForceGraph3D({ graphData, onNodeClick }: Props) {
                 ctx.restore();
             }
 
-            // Border
             ctx.beginPath();
             ctx.arc(64, 64, 60, 0, 2 * Math.PI);
-            ctx.strokeStyle = isMain ? '#60a5fa' : size > 10 ? '#fbbf24' : '#475569';
+            ctx.strokeStyle = borderColor;
             ctx.lineWidth = 4;
             ctx.stroke();
 
-            // Text Label (only if no image)
             if (!image) {
                 ctx.fillStyle = '#e2e8f0';
-                ctx.font = 'bold 24px Inter, sans-serif';
+                ctx.font = 'bold 20px Inter, system-ui, sans-serif';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(node.id.slice(-4).toUpperCase(), 64, 64);
+                ctx.fillText(textLabel.toUpperCase(), 64, 64);
             }
         };
 
@@ -228,28 +228,24 @@ export default function ForceGraph3D({ graphData, onNodeClick }: Props) {
 
     // Helper removed (integrated into nodeThreeObject for sorting/clipping)
 
-    // ⚡️ CUSTOM BEAM EDGES (Optimized Cylinder)
-    // Using Cylinder instead of dynamic TubeGeometry for performance and stability
-    // A straight Tube is identical to a Cylinder visually.
+    // ⚡️ CUSTOM BEAM EDGES (Optimized Cylinder) — opacity by recency
     const linkThreeObject = useCallback((link: any) => {
-        // Colors: Green for Inbound (to main), Red for Outbound (from main)
         let color = '#6366f1';
-        if (link.direction === 'inbound') color = '#22c55e'; // Green
-        if (link.direction === 'outbound') color = '#ef4444'; // Red
+        if (link.direction === 'inbound') color = '#22c55e';
+        if (link.direction === 'outbound') color = '#ef4444';
+        const opacity = 0.15 + 0.25 * recencyFactor(link.lastActive);
 
         const material = new THREE.MeshBasicMaterial({
             color,
             transparent: true,
-            opacity: 0.25 // Significantly reduced from 0.6 for cleaner look
+            opacity,
         });
 
-        // Radius based on value - Much thinner beams
         const val = link?.value || 1;
-        const radius = Math.max(0.1, Math.min(1.2, Math.log10(val + 1) * 0.3));
+        const radius = Math.max(0.08, Math.min(0.9, Math.log10(val + 1) * 0.22));
 
-        // Cylinder aligned to Z-axis (length 1)
         const geometry = new THREE.CylinderGeometry(radius, radius, 1, 6, 1, true);
-        geometry.rotateX(Math.PI / 2); // Align Y -> Z
+        geometry.rotateX(Math.PI / 2);
 
         return new THREE.Mesh(geometry, material);
     }, []);
@@ -283,13 +279,43 @@ export default function ForceGraph3D({ graphData, onNodeClick }: Props) {
         return `$${value.toFixed(2)}`;
     };
 
+    /** Recency: 1 = last 7d, lower = older. Used for edge opacity. */
+    function recencyFactor(lastActive: string | undefined): number {
+        if (!lastActive) return 0.5;
+        const then = new Date(lastActive).getTime();
+        const days = (Date.now() - then) / (24 * 60 * 60 * 1000);
+        if (days <= 7) return 1;
+        if (days <= 30) return 0.85;
+        if (days <= 90) return 0.6;
+        return 0.35;
+    }
+
+    const linkLabel = useCallback((link: any) => {
+        const val = formatValue(link?.value);
+        const last = link?.lastActive ? new Date(link.lastActive).toLocaleDateString() : '—';
+        const type = link?.relationshipType || '—';
+        const dir = link?.direction === 'inbound' ? '→ You' : link?.direction === 'outbound' ? 'You →' : '↔';
+        const txCount = link?.txCount ?? 0;
+        return `
+            <div style="background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); border: 1px solid rgba(99, 102, 241, 0.4); padding: 12px 14px; border-radius: 10px; color: white; font-family: Inter, system-ui, sans-serif; min-width: 160px;">
+                <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;">${type} · ${txCount} tx</div>
+                <div style="font-size: 14px; font-weight: 600; margin: 6px 0;">${val} ${dir}</div>
+                <div style="font-size: 11px; color: #64748b;">Last active: ${last}</div>
+            </div>
+        `;
+    }, []);
+
     const nodeLabel = useCallback((node: any) => {
         const formattedValue = formatValue(node.value);
+        const name = node.displayName || node.label || `${node.id.slice(0, 6)}…${node.id.slice(-4)}`;
+        const cat = (node.category || 'p2p').toUpperCase();
+        const catColor = CATEGORY_COLORS[node.category] || CATEGORY_COLORS.p2p;
         return `
-            <div style="background: rgba(2, 6, 23, 0.9); backdrop-filter: blur(8px); border: 1px solid rgba(59, 130, 246, 0.5); padding: 12px; border-radius: 8px; color: white; font-family: Inter, sans-serif;">
-                <div style="font-weight: 700; font-size: 14px; margin-bottom: 4px;">${node.id.slice(0, 6)}...${node.id.slice(-4)}</div>
-                <div style="font-size: 12px; color: #94a3b8;">Type: <span style="color: #60a5fa">${node.type || 'Wallet'}</span></div>
-                ${formattedValue ? `<div style="font-size: 14px; color: #4ade80; font-weight: 600; margin-top: 6px;">${formattedValue} Volume</div>` : ''}
+            <div style="background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); border: 1px solid ${catColor}40; padding: 14px 16px; border-radius: 10px; color: white; font-family: Inter, system-ui, sans-serif; min-width: 140px;">
+                <div style="font-weight: 700; font-size: 15px; margin-bottom: 6px;">${name}</div>
+                <div style="font-size: 11px; color: ${catColor}; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">${cat}</div>
+                <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">${node.type || '—'}</div>
+                ${formattedValue ? `<div style="font-size: 13px; color: #4ade80; font-weight: 600; margin-top: 8px;">${formattedValue} vol</div>` : ''}
             </div>
         `;
     }, []);
@@ -309,7 +335,8 @@ export default function ForceGraph3D({ graphData, onNodeClick }: Props) {
             // Link BEAMS
             linkThreeObject={linkThreeObject}
             linkPositionUpdate={linkPositionUpdate}
-            linkWidth={0} // Disable default lines
+            linkLabel={linkLabel}
+            linkWidth={0}
 
             // Particles (Still good to have inside beams?)
             linkDirectionalParticles={1}

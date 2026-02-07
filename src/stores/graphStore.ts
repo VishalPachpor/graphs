@@ -1,22 +1,47 @@
 import { create } from 'zustand';
 import { GraphData, GraphNode, GraphLink } from '@/types/graph';
+import type { NodeCategory } from '@/types/graph';
+
+export type GraphMode = 'transaction' | 'memory';
+export type TimeRange = '7d' | '30d' | '90d' | 'all';
+
+const ALL_CATEGORIES: NodeCategory[] = ['defi', 'tradfi', 'cex', 'p2p'];
 
 interface GraphStore {
     graph: GraphData;
+    graphMode: GraphMode;
     expandedNodes: Set<string>;
     pendingNodes: Set<string>;
     selectedNode: GraphNode | null;
+    /** Categories to show; empty = all */
+    filterCategories: NodeCategory[];
+    searchQuery: string;
+    timeRange: TimeRange;
 
     initGraph: (rootAddress: string) => void;
+    setGraphMode: (mode: GraphMode) => void;
+    setTimeRange: (range: TimeRange) => void;
+    loadFullGraph: () => Promise<void>;
     expandNode: (address: string, chainId?: number) => Promise<void>;
     selectNode: (node: GraphNode | null) => void;
+    setFilterCategories: (categories: NodeCategory[]) => void;
+    setSearchQuery: (q: string) => void;
 }
 
 export const useGraphStore = create<GraphStore>((set, get) => ({
     graph: { nodes: [], links: [] },
+    graphMode: 'transaction',
     expandedNodes: new Set(),
     pendingNodes: new Set(),
     selectedNode: null,
+    filterCategories: ALL_CATEGORIES,
+    searchQuery: '',
+    timeRange: 'all',
+
+    setGraphMode: (mode) => set({ graphMode: mode }),
+    setTimeRange: (range) => set({ timeRange: range }),
+    setFilterCategories: (categories) => set({ filterCategories: categories.length ? categories : ALL_CATEGORIES }),
+    setSearchQuery: (q) => set({ searchQuery: (q || '').trim() }),
 
     initGraph: (address) => {
         const normalizedAddress = address.toLowerCase();
@@ -35,6 +60,29 @@ export const useGraphStore = create<GraphStore>((set, get) => ({
             pendingNodes: new Set(),
             selectedNode: null,
         });
+    },
+
+    loadFullGraph: async () => {
+        const { graphMode, timeRange } = get();
+        const base = graphMode === 'memory' ? '/api/graph/memories' : '/api/graph';
+        const params = timeRange !== 'all' && graphMode === 'transaction' ? `?range=${timeRange}` : graphMode === 'memory' && timeRange !== 'all' ? `?range=${timeRange}` : '';
+        const url = base + params;
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (!res.ok || !data.nodes || !data.links) {
+                console.error('Failed to load graph:', data.error || data);
+                return;
+            }
+            set({
+                graph: data as GraphData,
+                expandedNodes: new Set(),
+                pendingNodes: new Set(),
+                selectedNode: null,
+            });
+        } catch (error) {
+            console.error('Failed to load full graph:', error);
+        }
     },
 
     expandNode: async (address, chainId = 1) => {
@@ -135,3 +183,22 @@ export const useGraphStore = create<GraphStore>((set, get) => ({
 
     selectNode: (node) => set({ selectedNode: node }),
 }));
+
+/** Client-side filtered graph by category and search */
+export function useFilteredGraph(): GraphData {
+    const graph = useGraphStore((s) => s.graph);
+    const filterCategories = useGraphStore((s) => s.filterCategories);
+    const searchQuery = useGraphStore((s) => s.searchQuery);
+    const categorySet = new Set(filterCategories.length ? filterCategories : ALL_CATEGORIES);
+    const q = searchQuery.toLowerCase();
+    const nodes = graph.nodes.filter((n) => {
+        const cat = n.category || 'p2p';
+        if (!categorySet.has(cat)) return false;
+        if (!q) return true;
+        const text = `${n.label} ${n.id} ${n.displayName || ''}`.toLowerCase();
+        return text.includes(q);
+    });
+    const visibleIds = new Set(nodes.map((n) => n.id));
+    const links = graph.links.filter((l) => visibleIds.has(l.source) && visibleIds.has(l.target));
+    return { nodes, links };
+}

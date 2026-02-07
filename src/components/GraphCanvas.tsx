@@ -1,7 +1,7 @@
 'use client';
 import dynamic from 'next/dynamic';
 import { useEffect } from 'react';
-import { useGraphStore } from '@/stores/graphStore';
+import { useGraphStore, useFilteredGraph } from '@/stores/graphStore';
 import { GraphNode } from '@/types/graph';
 
 const DEFAULT_WALLET_ADDRESS = '0xB29b9fd58CdB2E3Bb068Bc8560D8c13B2454684d';
@@ -27,18 +27,20 @@ const ForceGraph2DComponent = dynamic(() => import('./ForceGraph2D'), {
 });
 
 export function GraphCanvas() {
-    const { graph, initGraph, expandNode, selectNode } = useGraphStore();
+    const { graph, loadFullGraph, expandNode, selectNode } = useGraphStore();
+    const filteredGraph = useFilteredGraph();
 
     useEffect(() => {
         if (graph.nodes.length === 0) {
-            initGraph(DEFAULT_WALLET_ADDRESS);
-            expandNode(DEFAULT_WALLET_ADDRESS, DEFAULT_CHAIN_ID);
+            loadFullGraph();
         }
     }, []);
 
     const handleNodeClick = (node: GraphNode) => {
         selectNode(node);
-        expandNode(node.id, DEFAULT_CHAIN_ID);
+        if (/^0x[a-f0-9]{40}$/i.test(node.id)) {
+            expandNode(node.id, DEFAULT_CHAIN_ID);
+        }
         if (typeof window !== 'undefined' && window.webkit?.messageHandlers?.itemTapped) {
             const handler = window.webkit.messageHandlers.itemTapped;
             handler.postMessage({ nodeId: node.id });
@@ -56,6 +58,6 @@ export function GraphCanvas() {
     }
 
     return (
-        <ForceGraph3DComponent graphData={graph} onNodeClick={handleNodeClick} />
+        <ForceGraph3DComponent graphData={filteredGraph} onNodeClick={handleNodeClick} />
     );
 }
