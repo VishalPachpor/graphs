@@ -82,7 +82,7 @@ async function fetchNormalTransactions(
     } catch (error: unknown) {
         clearTimeout(timeoutId);
         console.log('[Etherscan] Normal tx fetch failed:', (error as Error).message);
-        return [];
+        throw error; // Rethrow to trigger fallback
     }
 }
 
@@ -127,7 +127,7 @@ async function fetchTokenTransfers(
     } catch (error: unknown) {
         clearTimeout(timeoutId);
         console.log('[Etherscan] Token tx fetch failed:', (error as Error).message);
-        return [];
+        throw error; // Rethrow to trigger fallback
     }
 }
 
@@ -204,9 +204,6 @@ export async function getAssetTransfersFromExplorer(
         };
     } catch (error) {
         console.error('[Etherscan] Error fetching transfers:', error);
-        return {
-            inbound: { transfers: [] },
-            outbound: { transfers: [] },
-        };
+        throw error; // Rethrow to trigger fallback
     }
 }

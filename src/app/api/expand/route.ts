@@ -209,7 +209,6 @@ export async function GET(req: NextRequest) {
         const centerId = normalizedAddress;
 
         // 1. Filter relevant transactions (involving center)
-        // Use SIMULATED_DEFAULT_WALLET as alias for requested address to ensure data visibility
         const relevantTxs = transactions.filter(tx =>
             tx.fromId === SIMULATED_DEFAULT_WALLET || tx.toId === SIMULATED_DEFAULT_WALLET
         ).map(tx => ({
@@ -228,13 +227,16 @@ export async function GET(req: NextRequest) {
             label: 'You',
             type: 'main',
             value: 0,
-            txCount: 0
+            txCount: 0,
+            source: 'simulated',
+            category: 'p2p'
         });
 
         relevantTxs.forEach(tx => {
             const otherId = tx.fromId === centerId ? tx.toId : tx.fromId;
             const amount = tx.amountUsd || 0;
             const isInbound = tx.toId === centerId;
+            const txCategory = (tx.metadata?.category as string) || 'p2p';
 
             // Update/Create Node
             const existing = nodeMap.get(otherId) || {
@@ -242,7 +244,9 @@ export async function GET(req: NextRequest) {
                 label: '',
                 type: 'highValue',
                 value: 0,
-                txCount: 0
+                txCount: 0,
+                source: 'simulated',
+                category: txCategory
             };
 
             existing.value += amount;
@@ -251,8 +255,10 @@ export async function GET(req: NextRequest) {
             if (!existing.label) {
                 const info = getNodeDisplayInfo(otherId);
                 existing.label = info?.displayName || `${otherId.slice(0, 6)}...`;
-                if (tx.metadata?.category === 'cex') existing.type = 'exchange';
-                else if (tx.metadata?.category === 'defi') existing.type = 'contract';
+                if (txCategory === 'cex') existing.type = 'exchange';
+                else if (txCategory === 'defi') existing.type = 'contract';
+                else if (existing.value > 10000) existing.type = 'highValue';
+                else existing.type = isInbound ? 'sender' : 'receiver';
             }
             nodeMap.set(otherId, existing);
 
@@ -272,13 +278,21 @@ export async function GET(req: NextRequest) {
                     target: otherId,
                     value: amount,
                     txCount: 1,
-                    direction: isInbound ? 'inbound' : 'outbound'
+                    direction: isInbound ? 'inbound' : 'outbound',
+                    sourceType: 'simulated',
+                    relationshipType: txCategory === 'defi' ? 'DeFi' : txCategory === 'tradfi' ? 'TradFi' : txCategory === 'cex' ? 'CEX' : 'P2P'
                 });
             }
         });
 
+        // Convert and sort
         const nodes = Array.from(nodeMap.values());
         const links = Array.from(linkMap.values());
+
+        // Log fallback usage
+        if (!process.env.NEXT_PUBLIC_ALCHEMY_API_KEY) {
+            console.log('[Expand API] Using full simulation fallback (No API Key or Network Fail)');
+        }
 
         return Response.json({ nodes, links });
     }
