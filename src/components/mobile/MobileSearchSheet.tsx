@@ -80,10 +80,12 @@ export function MobileSearchSheet({ isOpen, onClose }: MobileSearchSheetProps) {
         if (!localQuery.trim()) return;
 
         // If it's an address, try to load it
+        // If it's an address, load it
         if (/^0x[a-fA-F0-9]{40}$/.test(localQuery)) {
-            // TODO: call initGraph or expandNode on this address
-            // For now, let's treat it as a search
-            setSearchQuery(localQuery);
+            // Initialize graph with this new root address
+            useGraphStore.getState().initGraph(localQuery);
+            useGraphStore.getState().expandNode(localQuery);
+            setSearchQuery('');
         } else {
             setSearchQuery(localQuery);
         }
