@@ -39,8 +39,14 @@ export async function GET(req: NextRequest) {
         // Use Etherscan API for transaction history (free, reliable)
         const { inbound, outbound } = await getAssetTransfersFromExplorer(normalizedAddress, chainId);
 
-        // Fetch prices in parallel
+        // Check if we got any data - if not, use fallback
         const allTransfers = [...inbound.transfers, ...outbound.transfers];
+        if (allTransfers.length === 0) {
+            console.log('[Expand API] No transactions found from Etherscan, using simulated fallback');
+            throw new Error('EMPTY_RESULTS'); // Trigger fallback
+        }
+
+        // Fetch prices in parallel
         const tokenAddresses = allTransfers
             .filter(t => t.rawContract?.address)
             .map(t => t.rawContract!.address!);
