@@ -1,5 +1,5 @@
-import { getAlchemyClient } from '@/lib/alchemy';
-import { AssetTransfersCategory } from 'alchemy-sdk';
+import { callWithFallback } from '@/lib/alchemy';
+import { getAssetTransfersFromExplorer } from '@/lib/etherscan';
 import { NextRequest } from 'next/server';
 import { NodeType, LinkDirection } from '@/types/graph';
 import {
@@ -27,34 +27,18 @@ export async function GET(req: NextRequest) {
     }
 
     const normalizedAddress = address.toLowerCase();
-    const alchemy = getAlchemyClient(chainId);
 
     console.log(`[Expand API] Fetching for ${normalizedAddress} on chain ${chainId}`);
 
     try {
-        const currentBlock = await alchemy.core.getBlockNumber();
-        const blocksPerDay = 24 * 60 * 5;
-        // Increase lookback to ~180 days (6 months) to catch more history for less active wallets
-        const fromBlock = Math.max(0, currentBlock - 180 * blocksPerDay);
-
-        const [inbound, outbound] = await Promise.all([
-            alchemy.core.getAssetTransfers({
-                fromBlock: `0x${fromBlock.toString(16)}`,
-                toAddress: normalizedAddress,
-                category: [AssetTransfersCategory.EXTERNAL, AssetTransfersCategory.ERC20],
-                maxCount: 50,
-            }),
-            alchemy.core.getAssetTransfers({
-                fromBlock: `0x${fromBlock.toString(16)}`,
-                fromAddress: normalizedAddress,
-                category: [AssetTransfersCategory.EXTERNAL, AssetTransfersCategory.ERC20],
-                maxCount: 50,
-            }),
-        ]);
+        // Use Etherscan API for transaction history (free, reliable)
+        const { inbound, outbound } = await getAssetTransfersFromExplorer(normalizedAddress, chainId);
 
         // Fetch prices in parallel
         const allTransfers = [...inbound.transfers, ...outbound.transfers];
-        const tokenAddresses = extractTokenAddresses(allTransfers);
+        const tokenAddresses = allTransfers
+            .filter(t => t.rawContract?.address)
+            .map(t => t.rawContract!.address!);
 
         const [ethPrice, tokenPrices] = await Promise.all([
             getEthPrice(),
@@ -132,6 +116,30 @@ export async function GET(req: NextRequest) {
             .sort((a, b) => b.score - a.score)
             .slice(0, 20);
 
+        // Fetch metadata for top nodes to improve labels/logos
+        const topNodes = ranked.slice(0, 10);
+        const metadataMap = new Map<string, string>(); // address -> name
+
+        try {
+            // Use public RPC for ENS lookups
+            const provider = await callWithFallback(chainId, async (p) => p);
+            await Promise.all(
+                topNodes.map(async (node) => {
+                    // Try ENS reverse lookup (for users and some protocols)
+                    try {
+                        const ens = await provider.lookupAddress(node.address);
+                        if (ens) {
+                            metadataMap.set(node.address, ens);
+                        }
+                    } catch {
+                        // Ignore errors (address has no ENS)
+                    }
+                })
+            );
+        } catch (error) {
+            console.error('[Expand API] Metadata fetch failed:', error);
+        }
+
         // Determine top 3 by USD value for "highValue" type
         const valueRanked = [...ranked].sort((a, b) => b.totalValueUsd - a.totalValueUsd);
         const top3Values = new Set(valueRanked.slice(0, 3).map(x => x.address));
@@ -150,9 +158,14 @@ export async function GET(req: NextRequest) {
                 nodeType = 'sender'; // they sent more to main
             }
 
+            // Use resolved name if available
+            const resolvedName = metadataMap.get(cp.address);
+            const label = resolvedName || `${cp.address.slice(0, 6)}...${cp.address.slice(-4)}`;
+
             return {
                 id: cp.address,
-                label: `${cp.address.slice(0, 6)}...${cp.address.slice(-4)}`,
+                label: label,
+                displayName: resolvedName, // Pass pure name for logo lookup
                 type: nodeType,
                 value: cp.totalValueUsd, // NOW IN USD!
                 txCount: cp.txCount,

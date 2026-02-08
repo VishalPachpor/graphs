@@ -14,8 +14,8 @@ import { getNodeColor, getNodeContent } from '@/utils/mobileGraphUtils';
 const CAMERA_CONFIG = {
     fov: 38,              // Mobile premium spatial FOV
     padding: 1.35,        // UX breathing space
-    tilt: 0.35,           // Cinematic perspective tilt
-    yCompression: 0.75,   // Vertical orbit compression for tall viewports
+    tilt: 0.45,           // Cinematic perspective tilt (increased)
+    yCompression: 0.9,    // Reduced compression for more depth
     entranceDuration: 2,  // Seconds for entrance animation
     lerpSpeed: 0.08,      // Smooth camera movement
 };
@@ -61,30 +61,56 @@ function CameraController({ outerRadius }: { outerRadius: number }) {
 }
 
 // --- Configuration ---
-// --- Configuration ---
 const ORBIT_CONFIG = {
-    core: { radius: 3.5, tilt: [0.2, 0.1, 0] as [number, number, number], speed: 0.1, direction: 1, color: '#8B5CF6' },
-    active: { radius: 5.5, tilt: [0.4, -0.2, 0] as [number, number, number], speed: 0.05, direction: -1, color: '#6366F1' },
-    ecosystem: { radius: 7.5, tilt: [0.1, 0.3, 0] as [number, number, number], speed: 0.03, direction: 1, color: '#3B82F6' },
+    // DRAMATIC tilts for 3D depth - X tilt creates front/back, Z tilt creates side angles
+    core: { radius: 3.5, tilt: [0.5, 0.15, 0.1] as [number, number, number], speed: 0.12, direction: 1, color: '#8B5CF6' },
+    active: { radius: 5.5, tilt: [0.35, 0.3, -0.15] as [number, number, number], speed: 0.06, direction: -1, color: '#6366F1' },
+    ecosystem: { radius: 7.5, tilt: [0.6, -0.2, 0.1] as [number, number, number], speed: 0.03, direction: 1, color: '#3B82F6' },
+};
+
+// Organic noise parameters for breaking perfect symmetry
+const ORGANIC_NOISE = {
+    angleVariance: 0.15,   // ~8.5° deviation from perfect spacing
+    radiusVariance: 0.3,   // ~12% deviation from perfect circle
+    yVariance: 0.4,        // INCREASED: significant vertical scatter for depth
 };
 
 // --- Components ---
 
-function OrbitalRing({ radius, color }: { radius: number, color: string }) {
+// Golden angle constant for natural distribution (Fibonacci spiral)
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ~137.5° in radians
+
+function OrbitalRing({ radius, color, tier }: { radius: number, color: string, tier: 'core' | 'active' | 'ecosystem' }) {
+    // Tier-based styling: inner rings brighter, outer rings faded
+    const tierOpacity = tier === 'core' ? 0.25 : tier === 'active' ? 0.15 : 0.08;
+    const tierGlowOpacity = tier === 'core' ? 0.1 : tier === 'active' ? 0.05 : 0.02;
+    const tierThickness = tier === 'core' ? 0.04 : tier === 'active' ? 0.03 : 0.02;
+
     return (
         <group>
             {/* The Visual Ring Path */}
             <mesh rotation={[-Math.PI / 2, 0, 0]}>
-                <ringGeometry args={[radius - 0.02, radius + 0.02, 128]} />
-                <meshBasicMaterial color={color} transparent opacity={0.15} side={THREE.DoubleSide} />
+                <ringGeometry args={[radius - tierThickness, radius + tierThickness, 128]} />
+                <meshBasicMaterial color={color} transparent opacity={tierOpacity} side={THREE.DoubleSide} />
             </mesh>
             {/* Subtle glow ring */}
             <mesh rotation={[-Math.PI / 2, 0, 0]}>
-                <ringGeometry args={[radius - 0.1, radius + 0.1, 64]} />
-                <meshBasicMaterial color={color} transparent opacity={0.05} side={THREE.DoubleSide} />
+                <ringGeometry args={[radius - 0.15, radius + 0.15, 64]} />
+                <meshBasicMaterial color={color} transparent opacity={tierGlowOpacity} side={THREE.DoubleSide} />
             </mesh>
         </group>
     );
+}
+
+// Seeded pseudo-random for consistent noise per node
+function seededRandom(seed: string): number {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+        const char = seed.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash |= 0;
+    }
+    return (Math.abs(hash) % 1000) / 1000;
 }
 
 // Group that handles the rotation of nodes along the ring
@@ -92,12 +118,16 @@ function RingTier({
     config,
     nodes,
     tier,
-    onNodeClick
+    onNodeClick,
+    maxValue,
+    maxTxCount
 }: {
     config: typeof ORBIT_CONFIG.core,
     nodes: GraphNode[],
     tier: 'core' | 'active' | 'ecosystem',
-    onNodeClick: (n: GraphNode) => void
+    onNodeClick: (n: GraphNode) => void,
+    maxValue: number,
+    maxTxCount: number
 }) {
     const groupRef = useRef<THREE.Group>(null);
 
@@ -110,24 +140,34 @@ function RingTier({
 
     return (
         <group rotation={config.tilt}>
-            {/* Static Visual Ring Track */}
-            <OrbitalRing radius={config.radius} color={config.color} />
+            {/* Static Visual Ring Track - now with tier-based styling */}
+            <OrbitalRing radius={config.radius} color={config.color} tier={tier} />
 
             {/* Rotating Node Container */}
             <group ref={groupRef}>
                 {nodes.map((node, i) => {
-                    // Distribute nodes evenly along the ring
-                    const angle = (i / nodes.length) * Math.PI * 2;
-                    const x = Math.cos(angle) * config.radius;
-                    const z = Math.sin(angle) * config.radius;
+                    // GOLDEN ANGLE distribution for natural spacing
+                    const goldenAngle = i * GOLDEN_ANGLE;
+                    const seed = node.id;
+                    const angleNoise = (seededRandom(seed) - 0.5) * ORGANIC_NOISE.angleVariance;
+                    const radiusNoise = (seededRandom(seed + 'r') - 0.5) * ORGANIC_NOISE.radiusVariance * config.radius;
+                    const yNoise = (seededRandom(seed + 'y') - 0.5) * ORGANIC_NOISE.yVariance;
+
+                    const angle = goldenAngle + angleNoise;
+                    const radius = config.radius + radiusNoise;
+                    const x = Math.cos(angle) * radius;
+                    const z = Math.sin(angle) * radius;
+                    const y = yNoise;
 
                     return (
                         <GlassNode
                             key={node.id}
-                            position={[x, 0, z]}
+                            position={[x, y, z]}
                             node={node}
                             onClick={() => onNodeClick(node)}
                             tier={tier}
+                            maxValue={maxValue}
+                            maxTxCount={maxTxCount}
                         />
                     );
                 })}
@@ -136,13 +176,21 @@ function RingTier({
     )
 }
 
-function GlassNode({ position, node, onClick, tier }: { position: [number, number, number], node: GraphNode, onClick: () => void, tier: 'core' | 'active' | 'ecosystem' }) {
+function GlassNode({ position, node, onClick, tier, maxValue, maxTxCount }: { position: [number, number, number], node: GraphNode, onClick: () => void, tier: 'core' | 'active' | 'ecosystem', maxValue: number, maxTxCount: number }) {
     const [hovered, setHovered] = useState(false);
     const content = useMemo(() => getNodeContent(node), [node]);
     const color = useMemo(() => getNodeColor(node.type), [node.type]);
 
-    // Scale based on tier
-    const scale = tier === 'core' ? 0.9 : tier === 'active' ? 0.7 : 0.5;
+    // Dynamic scale based on transaction value (hierarchy)
+    const tierBaseScale = tier === 'core' ? 0.85 : tier === 'active' ? 0.65 : 0.5;
+    const valueRatio = maxValue > 0 ? Math.min((node.value || 0) / maxValue, 1) : 0;
+    const valueScale = 1 + valueRatio * 0.35; // Up to 35% larger for high-value nodes
+    const scale = tierBaseScale * valueScale;
+
+    // Importance-based glow intensity (also consider activity)
+    const activityRatio = maxTxCount > 0 ? (node.txCount || 0) / maxTxCount : 0;
+    const isImportant = node.type === 'highValue' || (node.value && node.value > maxValue * 0.5) || activityRatio > 0.5;
+    const glowIntensity = isImportant ? 0.7 : 0.35;
 
     // Simple direct click handler for the DOM overlay
     const handleClick = (e: React.MouseEvent) => {
@@ -172,10 +220,10 @@ function GlassNode({ position, node, onClick, tier }: { position: [number, numbe
                         />
                     </mesh>
 
-                    {/* Inner Core Glow */}
-                    <mesh scale={0.4}>
+                    {/* Inner Core Glow - intensity based on importance */}
+                    <mesh scale={0.35 + glowIntensity * 0.15}>
                         <sphereGeometry args={[0.4, 16, 16]} />
-                        <meshBasicMaterial color={color} toneMapped={false} />
+                        <meshBasicMaterial color={color} toneMapped={false} opacity={0.6 + glowIntensity * 0.4} transparent />
                     </mesh>
 
                     {/* Content Overlay - THE PRIMARY CLICK TARGET */}
@@ -259,6 +307,16 @@ function CenterAvatar() {
 }
 
 function SolarSystemScene({ nodes, onNodeClick }: { nodes: GraphNode[], onNodeClick: (n: GraphNode) => void }) {
+    // Calculate max value for hierarchy scaling
+    const maxValue = useMemo(() => {
+        return Math.max(...nodes.map(n => n.value || 0), 1);
+    }, [nodes]);
+
+    // Calculate max txCount for activity-based features
+    const maxTxCount = useMemo(() => {
+        return Math.max(...nodes.map(n => n.txCount || 0), 1);
+    }, [nodes]);
+
     const groups = useMemo(() => {
         const otherNodes = nodes.filter(n => n.type !== 'main');
 
@@ -296,10 +354,10 @@ function SolarSystemScene({ nodes, onNodeClick }: { nodes: GraphNode[], onNodeCl
 
             {/* Vertical Orbit Compression Wrapper - fits tall mobile viewports */}
             <group scale={[1, CAMERA_CONFIG.yCompression, 1]}>
-                {/* Render Animated Tiers with depth-faded opacities */}
-                <RingTier config={ORBIT_CONFIG.core} nodes={groups.core} tier="core" onNodeClick={onNodeClick} />
-                <RingTier config={ORBIT_CONFIG.active} nodes={groups.active} tier="active" onNodeClick={onNodeClick} />
-                <RingTier config={ORBIT_CONFIG.ecosystem} nodes={groups.ecosystem} tier="ecosystem" onNodeClick={onNodeClick} />
+                {/* Render Animated Tiers - pass maxValue and maxTxCount for hierarchy scaling */}
+                <RingTier config={ORBIT_CONFIG.core} nodes={groups.core} tier="core" onNodeClick={onNodeClick} maxValue={maxValue} maxTxCount={maxTxCount} />
+                <RingTier config={ORBIT_CONFIG.active} nodes={groups.active} tier="active" onNodeClick={onNodeClick} maxValue={maxValue} maxTxCount={maxTxCount} />
+                <RingTier config={ORBIT_CONFIG.ecosystem} nodes={groups.ecosystem} tier="ecosystem" onNodeClick={onNodeClick} maxValue={maxValue} maxTxCount={maxTxCount} />
             </group>
 
             {/* Stars */}
