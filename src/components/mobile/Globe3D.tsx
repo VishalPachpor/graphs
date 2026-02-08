@@ -120,14 +120,18 @@ function RingTier({
     tier,
     onNodeClick,
     maxValue,
-    maxTxCount
+    maxTxCount,
+    hoveredNodeId,
+    setHoveredNodeId
 }: {
     config: typeof ORBIT_CONFIG.core,
     nodes: GraphNode[],
     tier: 'core' | 'active' | 'ecosystem',
     onNodeClick: (n: GraphNode) => void,
     maxValue: number,
-    maxTxCount: number
+    maxTxCount: number,
+    hoveredNodeId: string | null,
+    setHoveredNodeId: (id: string | null) => void
 }) {
     const groupRef = useRef<THREE.Group>(null);
 
@@ -168,6 +172,8 @@ function RingTier({
                             tier={tier}
                             maxValue={maxValue}
                             maxTxCount={maxTxCount}
+                            hoveredNodeId={hoveredNodeId}
+                            setHoveredNodeId={setHoveredNodeId}
                         />
                     );
                 })}
@@ -176,7 +182,25 @@ function RingTier({
     )
 }
 
-function GlassNode({ position, node, onClick, tier, maxValue, maxTxCount }: { position: [number, number, number], node: GraphNode, onClick: () => void, tier: 'core' | 'active' | 'ecosystem', maxValue: number, maxTxCount: number }) {
+function GlassNode({
+    position,
+    node,
+    onClick,
+    tier,
+    maxValue,
+    maxTxCount,
+    hoveredNodeId,
+    setHoveredNodeId
+}: {
+    position: [number, number, number],
+    node: GraphNode,
+    onClick: () => void,
+    tier: 'core' | 'active' | 'ecosystem',
+    maxValue: number,
+    maxTxCount: number,
+    hoveredNodeId: string | null,
+    setHoveredNodeId: (id: string | null) => void
+}) {
     const [hovered, setHovered] = useState(false);
     const content = useMemo(() => getNodeContent(node), [node]);
     const color = useMemo(() => getNodeColor(node.type), [node.type]);
@@ -198,10 +222,41 @@ function GlassNode({ position, node, onClick, tier, maxValue, maxTxCount }: { po
         onClick();
     };
 
+    // Ref for depth scaling
+    const groupRef = useRef<THREE.Group>(null);
+    const visualRef = useRef<THREE.Group>(null);
+
+    // Parallax Depth Scaling
+    useFrame(() => {
+        if (groupRef.current && visualRef.current) {
+            const worldPos = new THREE.Vector3();
+            groupRef.current.getWorldPosition(worldPos);
+
+            // Camera is at positive Z. Nodes with higher Z are closer.
+            // Z range is roughly -8 to +8.
+            // Scale factor: 0.8 (far) to 1.2 (near)
+            const z = worldPos.z;
+            const maxRadius = ORBIT_CONFIG.ecosystem.radius;
+            const depthFactor = 0.25; // 25% size variation based on depth
+            const parallaxScale = 1 + (z / maxRadius) * depthFactor;
+
+            const hoverScale = hovered ? 1.15 : 1;
+            const finalScale = scale * parallaxScale * hoverScale;
+
+            // Apply scale to the visual group to avoid affecting hit areas if needed, 
+            // but here we want everything to scale.
+            visualRef.current.scale.setScalar(finalScale);
+        }
+    });
+
+    // Focus Dimming Logic
+    const isDimmed = hoveredNodeId && hoveredNodeId !== node.id;
+    const opacity = isDimmed ? 0.3 : 1; // Dim to 30% if another node is hovered
+
     return (
-        <group position={position}>
+        <group position={position} ref={groupRef}>
             <Float speed={2} rotationIntensity={0} floatIntensity={0.5}>
-                <group scale={hovered ? scale * 1.15 : scale}>
+                <group ref={visualRef}>
 
                     {/* Glass Visuals - NO interaction, just visuals */}
                     <mesh>
@@ -209,7 +264,7 @@ function GlassNode({ position, node, onClick, tier, maxValue, maxTxCount }: { po
                         <meshPhysicalMaterial
                             color={color}
                             transmission={0.97}
-                            opacity={1}
+                            opacity={opacity}
                             roughness={0}
                             metalness={0.1}
                             ior={1.5}
@@ -238,8 +293,14 @@ function GlassNode({ position, node, onClick, tier, maxValue, maxTxCount }: { po
                     >
                         <div
                             onClick={handleClick}
-                            onMouseEnter={() => setHovered(true)}
-                            onMouseLeave={() => setHovered(false)}
+                            onMouseEnter={() => {
+                                setHovered(true);
+                                setHoveredNodeId(node.id);
+                            }}
+                            onMouseLeave={() => {
+                                setHovered(false);
+                                setHoveredNodeId(null);
+                            }}
                             className="flex items-center justify-center rounded-full overflow-hidden transition-all duration-200 cursor-pointer select-none"
                             style={{
                                 width: '50px',
@@ -307,6 +368,9 @@ function CenterAvatar() {
 }
 
 function SolarSystemScene({ nodes, onNodeClick }: { nodes: GraphNode[], onNodeClick: (n: GraphNode) => void }) {
+    // Shared state for Focus Dimming
+    const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+
     // Calculate max value for hierarchy scaling
     const maxValue = useMemo(() => {
         return Math.max(...nodes.map(n => n.value || 0), 1);
@@ -325,7 +389,14 @@ function SolarSystemScene({ nodes, onNodeClick }: { nodes: GraphNode[], onNodeCl
         const active = otherNodes.filter(n => !core.includes(n) && (n.type === 'exchange' || n.txCount && n.txCount > 5));
         const ecosystem = otherNodes.filter(n => !core.includes(n) && !active.includes(n));
 
-        return { core, active, ecosystem };
+        // CLUSTER CONSTELLATIONS: Sort by type to group similar nodes
+        const sortByType = (a: GraphNode, b: GraphNode) => (a.type || '').localeCompare(b.type || '');
+
+        return {
+            core: core.sort(sortByType),
+            active: active.sort(sortByType),
+            ecosystem: ecosystem.sort(sortByType)
+        };
     }, [nodes]);
 
     // We no longer need a global system rotation if the rings are rotating individually.
@@ -355,9 +426,36 @@ function SolarSystemScene({ nodes, onNodeClick }: { nodes: GraphNode[], onNodeCl
             {/* Vertical Orbit Compression Wrapper - fits tall mobile viewports */}
             <group scale={[1, CAMERA_CONFIG.yCompression, 1]}>
                 {/* Render Animated Tiers - pass maxValue and maxTxCount for hierarchy scaling */}
-                <RingTier config={ORBIT_CONFIG.core} nodes={groups.core} tier="core" onNodeClick={onNodeClick} maxValue={maxValue} maxTxCount={maxTxCount} />
-                <RingTier config={ORBIT_CONFIG.active} nodes={groups.active} tier="active" onNodeClick={onNodeClick} maxValue={maxValue} maxTxCount={maxTxCount} />
-                <RingTier config={ORBIT_CONFIG.ecosystem} nodes={groups.ecosystem} tier="ecosystem" onNodeClick={onNodeClick} maxValue={maxValue} maxTxCount={maxTxCount} />
+                <RingTier
+                    config={ORBIT_CONFIG.core}
+                    nodes={groups.core}
+                    tier="core"
+                    onNodeClick={onNodeClick}
+                    maxValue={maxValue}
+                    maxTxCount={maxTxCount}
+                    hoveredNodeId={hoveredNodeId}
+                    setHoveredNodeId={setHoveredNodeId}
+                />
+                <RingTier
+                    config={ORBIT_CONFIG.active}
+                    nodes={groups.active}
+                    tier="active"
+                    onNodeClick={onNodeClick}
+                    maxValue={maxValue}
+                    maxTxCount={maxTxCount}
+                    hoveredNodeId={hoveredNodeId}
+                    setHoveredNodeId={setHoveredNodeId}
+                />
+                <RingTier
+                    config={ORBIT_CONFIG.ecosystem}
+                    nodes={groups.ecosystem}
+                    tier="ecosystem"
+                    onNodeClick={onNodeClick}
+                    maxValue={maxValue}
+                    maxTxCount={maxTxCount}
+                    hoveredNodeId={hoveredNodeId}
+                    setHoveredNodeId={setHoveredNodeId}
+                />
             </group>
 
             {/* Stars */}
