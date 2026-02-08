@@ -1,20 +1,20 @@
-if (typeof global !== 'undefined') {
+if (typeof globalThis !== 'undefined') {
     // Check if localStorage is broken (exists but getItem is not a function)
     const isBroken =
-        typeof global.localStorage !== 'undefined' &&
-        typeof global.localStorage.getItem !== 'function';
+        typeof (globalThis as any).localStorage !== 'undefined' &&
+        typeof (globalThis as any).localStorage.getItem !== 'function';
 
-    if (isBroken || typeof global.localStorage === 'undefined') {
+    if (isBroken || typeof (globalThis as any).localStorage === 'undefined') {
         const noopStorage = {
-            getItem: (_key: string) => null,
-            setItem: (_key: string, _value: string) => { },
-            removeItem: (_key: string) => { },
+            getItem: () => null,
+            setItem: () => { },
+            removeItem: () => { },
             clear: () => { },
             length: 0,
-            key: (_index: number) => null,
+            key: () => null,
         };
 
-        Object.defineProperty(global, 'localStorage', {
+        Object.defineProperty(globalThis, 'localStorage', {
             value: noopStorage,
             writable: true,
             configurable: true,
