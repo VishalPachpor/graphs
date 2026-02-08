@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { SlidersHorizontal } from 'lucide-react';
 import { GraphNode } from '@/types/graph';
@@ -22,10 +22,44 @@ export function OrbitView3D({ onAIChat }: OrbitView3DProps) {
     const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
     const [activeSheet, setActiveSheet] = useState<ActiveSheet>(null);
 
-    // Summary stats (from filtered graph)
+    // Summary stats and insights (from filtered graph)
+    const insights = useMemo(() => {
+        const nonMainNodes = filteredGraph.nodes.filter((n) => n.type !== 'main');
+
+        // Find most valuable connection
+        const sortedByValue = [...nonMainNodes].sort((a, b) => (b.value || 0) - (a.value || 0));
+        const topConnection = sortedByValue[0];
+
+        // Find most active (by tx count)
+        const sortedByActivity = [...nonMainNodes].sort((a, b) => (b.txCount || 0) - (a.txCount || 0));
+        const mostActive = sortedByActivity[0];
+
+        // Count high-value and attention-needed
+        const highValue = nonMainNodes.filter((n) => (n.value || 0) > 1000).length;
+        const needAttention = nonMainNodes.filter((n) => (n.txCount || 0) > 10).length;
+
+        // Dynamic headline
+        let headline = 'Your Network Today';
+        if (mostActive && mostActive.txCount && mostActive.txCount > 5) {
+            headline = `Active with ${mostActive.displayName || mostActive.label}`;
+        } else if (topConnection) {
+            headline = `${highValue} strong connections`;
+        }
+
+        return {
+            headline,
+            topConnection: topConnection?.displayName || topConnection?.label || null,
+            mostActive: mostActive?.displayName || mostActive?.label || null,
+            mostActiveCount: mostActive?.txCount || 0,
+            highValue,
+            needAttention,
+            totalConnections: nonMainNodes.length,
+        };
+    }, [filteredGraph.nodes]);
+
     const stats = {
-        watching: filteredGraph.nodes.filter((n) => n.type !== 'main' && (n.value || 0) > 1000).length,
-        attention: filteredGraph.nodes.filter((n) => (n.txCount || 0) > 10).length,
+        watching: insights.highValue,
+        attention: insights.needAttention,
     };
 
     const filterCount = useGraphStore((s) => {
@@ -50,11 +84,33 @@ export function OrbitView3D({ onAIChat }: OrbitView3DProps) {
                 }}
             />
 
-            {/* Title */}
+            {/* Title - Contextual Headline */}
             <div className="absolute top-12 left-0 right-0 text-center z-20 pointer-events-none">
-                <h1 className="text-gray-400 text-sm font-medium tracking-widest uppercase">Memory Orbit</h1>
-                <p className="text-gray-600 text-xs mt-1">Drag to rotate • Pinch to zoom</p>
+                <h1 className="text-white/90 text-base font-medium tracking-wide">{insights.headline}</h1>
+                <p className="text-gray-500 text-xs mt-1">Explore your connections</p>
             </div>
+
+            {/* Insight Banner */}
+            {insights.mostActive && insights.mostActiveCount > 3 && (
+                <motion.div
+                    initial={{ y: -10, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    className="absolute top-24 left-4 right-4 z-20"
+                >
+                    <div
+                        className="flex items-center gap-3 py-2.5 px-4 rounded-xl"
+                        style={{
+                            background: 'linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.1))',
+                            border: '1px solid rgba(99,102,241,0.2)',
+                        }}
+                    >
+                        <span className="text-lg">🔥</span>
+                        <span className="text-sm text-gray-300">
+                            <strong className="text-white">{insights.mostActive}</strong> is your most active today
+                        </span>
+                    </div>
+                </motion.div>
+            )}
 
             {/* Filter Button (Status Bar Area) */}
             <button
@@ -96,18 +152,18 @@ export function OrbitView3D({ onAIChat }: OrbitView3DProps) {
                 >
                     <div className="flex items-center gap-2.5">
                         <div className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: 'rgba(99,102,241,0.3)' }}>
-                            <span className="text-sm">👁</span>
+                            <span className="text-sm">🔗</span>
                         </div>
-                        <span className="text-white text-sm">Watching: <strong>{stats.watching}</strong></span>
+                        <span className="text-white text-sm"><strong>{insights.totalConnections}</strong> relationships</span>
                     </div>
                     {stats.attention > 0 && (
                         <>
                             <div className="w-px h-5 bg-gray-700/50" />
                             <div className="flex items-center gap-2.5">
                                 <div className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: 'rgba(245,158,11,0.3)' }}>
-                                    <span className="text-sm">⚠️</span>
+                                    <span className="text-sm">⚡</span>
                                 </div>
-                                <span className="text-amber-400 text-sm"><strong>{stats.attention}</strong> attention</span>
+                                <span className="text-amber-400 text-sm"><strong>{stats.attention}</strong> active</span>
                             </div>
                         </>
                     )}

@@ -61,6 +61,9 @@ function CameraController({ outerRadius }: { outerRadius: number }) {
 }
 
 // --- Configuration ---
+// MAX VISIBLE NODES for mobile cognitive load (Fix 8)
+const MAX_VISIBLE_NODES = 25;
+
 const ORBIT_CONFIG = {
     // DRAMATIC tilts for 3D depth - X tilt creates front/back, Z tilt creates side angles
     core: { radius: 3.5, tilt: [0.5, 0.15, 0.1] as [number, number, number], speed: 0.12, direction: 1, color: '#8B5CF6' },
@@ -341,10 +344,34 @@ function GlassNode({
 }
 
 function CenterAvatar() {
+    const meshRef = useRef<THREE.Mesh>(null);
+    const haloRef = useRef<THREE.Mesh>(null);
+
+    // Breathing pulse animation (Fix 4)
+    useFrame((state) => {
+        const t = state.clock.elapsedTime;
+        const breathe = 1 + Math.sin(t * 1.5) * 0.08; // Subtle ~8% scale variation
+        const haloPulse = 1 + Math.sin(t * 2) * 0.15;
+
+        if (meshRef.current) {
+            meshRef.current.scale.setScalar(breathe);
+        }
+        if (haloRef.current) {
+            haloRef.current.scale.setScalar(haloPulse);
+            (haloRef.current.material as THREE.MeshBasicMaterial).opacity = 0.15 + Math.sin(t * 2) * 0.1;
+        }
+    });
+
     return (
         <group>
+            {/* Insight Halo Ring (Fix 4) */}
+            <mesh ref={haloRef} rotation={[-Math.PI / 2, 0, 0]}>
+                <ringGeometry args={[1.1, 1.2, 64]} />
+                <meshBasicMaterial color="#a855f7" transparent opacity={0.2} side={THREE.DoubleSide} />
+            </mesh>
+
             {/* Main Sphere */}
-            <mesh>
+            <mesh ref={meshRef}>
                 <sphereGeometry args={[0.8, 64, 64]} />
                 <meshPhysicalMaterial
                     color="#8B5CF6"
@@ -384,20 +411,29 @@ function SolarSystemScene({ nodes, onNodeClick }: { nodes: GraphNode[], onNodeCl
     const groups = useMemo(() => {
         const otherNodes = nodes.filter(n => n.type !== 'main');
 
+        // Sort by combined importance score (value + activity)
+        const scored = otherNodes.map(n => ({
+            node: n,
+            score: ((n.value || 0) / maxValue) + ((n.txCount || 0) / maxTxCount)
+        })).sort((a, b) => b.score - a.score);
+
+        // LIMIT TO MAX NODES (Fix 8)
+        const limited = scored.slice(0, MAX_VISIBLE_NODES).map(s => s.node);
+
         // Split into tiers
-        const core = otherNodes.filter(n => n.type === 'highValue' || (n.value && n.value > 1000));
-        const active = otherNodes.filter(n => !core.includes(n) && (n.type === 'exchange' || n.txCount && n.txCount > 5));
-        const ecosystem = otherNodes.filter(n => !core.includes(n) && !active.includes(n));
+        const core = limited.filter(n => n.type === 'highValue' || (n.value && n.value > maxValue * 0.3));
+        const active = limited.filter(n => !core.includes(n) && (n.type === 'exchange' || n.txCount && n.txCount > 3));
+        const ecosystem = limited.filter(n => !core.includes(n) && !active.includes(n));
 
         // CLUSTER CONSTELLATIONS: Sort by type to group similar nodes
         const sortByType = (a: GraphNode, b: GraphNode) => (a.type || '').localeCompare(b.type || '');
 
         return {
-            core: core.sort(sortByType),
-            active: active.sort(sortByType),
-            ecosystem: ecosystem.sort(sortByType)
+            core: core.sort(sortByType).slice(0, 5),        // Max 5 core
+            active: active.sort(sortByType).slice(0, 8),    // Max 8 active
+            ecosystem: ecosystem.sort(sortByType).slice(0, 12)  // Max 12 ecosystem
         };
-    }, [nodes]);
+    }, [nodes, maxValue, maxTxCount]);
 
     // We no longer need a global system rotation if the rings are rotating individually.
     // However, a very slow global drift can add depth.
